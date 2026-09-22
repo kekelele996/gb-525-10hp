@@ -39,6 +39,7 @@ docker compose down -v --remove-orphans
 - 工艺路线：维护有序步骤、每步引用的过敏原谱、声明过敏原、路线状态和乐观锁版本。
 - 接触关系：在路线内维护来源/目标步骤、接触类型、共享设备、清洗衰减、带入概率和证据记录。
 - 交叉接触矩阵：从真实路线、谱和已启用接触边计算目标步骤 × 过敏原矩阵，可按过敏原筛选并检查完整证据路径。
+- 缓解复核：质量分析员针对高风险路径（路线版本 + 过敏原 + 来源到目标步骤）登记清洗或换线措施，记录完成日期与证据；复核员通过后矩阵将该路径标记为已缓解，同时保留原始分数与证据。
 - 评估工作台：执行 `queued -> calculating -> pending_review -> accepted | rejected` 状态流；输入变化使旧结果变为 `stale`。
 - 审计检索：记录 request ID、操作者、实体、动作、前后摘要和版本元数据，并提供版本摘要对比。
 
@@ -102,6 +103,10 @@ docker compose down -v --remove-orphans
 
 每次运行保存完整输入快照、矩阵、风险项、算法/阈值版本和完成时间。没有结果更新接口；复核仅条件更新状态与复核字段。新输入版本不会覆盖旧 JSON，而是把旧结果标记为 `stale`。
 
+### `MitigationMeasure`
+
+针对单条高风险矩阵路径（`route_id` + `allergen` + `source_step_code` + `target_step_code`）的清洗或换线措施。登记时快照路线版本、原始分数与风险等级；同一路径最多一条 `pending` / `pending_review` 记录（事务校验加部分唯一索引双重保证）。完成日期不得晚于复核提交日。
+
 ## 传播算法
 
 1. 从 `ProcessRoute.ordered_steps_json` 建立节点，从同路线且 `enabled=true` 的 `ContactEdge` 建立有向边。
@@ -131,11 +136,21 @@ queued -> calculating -> pending_review -> accepted
 pending_review | accepted | rejected --输入变化--> stale
 ```
 
+缓解措施状态流：
+
+```text
+pending --重新提交--> pending_review --通过--> approved
+   ^                    \------拒绝------> rejected
+   \---输入版本变化使待复核措施失效---/
+```
+
 - 运行使用 `WHERE id = ? AND assessment_status = 'queued'` 条件更新。
 - 完成使用 `calculating` 条件更新并在同一事务内写审计。
 - 接受/拒绝使用 `pending_review` 条件更新，拒绝和接受均要求复核理由。
 - 谱、路线和边使用 `expected_version` 乐观锁；版本不一致返回 HTTP `409 version_conflict`。
 - 输入版本更新、边新增或更新在事务内将关联旧结果改为 `stale` 并写审计。
+- 路线步骤、接触边或过敏原谱版本变化在同一事务内把该路线（或全部）`pending_review` 措施置回 `pending` 并写审计；`approved` / `rejected` 为终态不受影响。
+- 措施复核使用 `pending_review` 条件更新；矩阵计算时按路径叠加最新措施状态，通过后显示已缓解且不改写原始分数。
 
 ## 共享枚举位置
 
@@ -167,14 +182,30 @@ pending_review | accepted | rejected --输入变化--> stale
 | 前端 store | `frontend/src/stores/assessments.ts` |
 | 页面 | `frontend/src/pages/AssessmentsPage.vue` |
 
+### `MitigationStatus = pending | pending_review | approved | rejected`
+
+| 层 | 位置 |
+| --- | --- |
+| 后端常量 / 状态转换 | `backend/internal/constants/mitigation.go` |
+| 数据库约束 / 模型 | `backend/internal/model/mitigation_measure.go` 的 `mitigation_status` CHECK 与部分唯一索引 |
+| DTO 请求与查询 | `backend/internal/dto/mitigation.go` |
+| 仓储条件更新 / 失效 | `backend/internal/repository/mitigation_repository.go`、`support_repository.go` |
+| 服务编排 | `backend/internal/service/mitigation_service.go`、`assessment_service.go` 的矩阵叠加 |
+| 路由权限 | `backend/internal/router/mitigation_router.go` |
+| 前端类型 | `frontend/src/types/mitigation.ts`、`types/assessment.ts` 的 `RiskItem.mitigation` |
+| 共享组件 | `frontend/src/components/common/EvidencePathPanel.vue` |
+| 页面 | `frontend/src/pages/MatrixPage.vue`、`MitigationsPage.vue` |
+
 ## 权限
 
 | 操作 | quality_analyst | reviewer | admin |
 | --- | :---: | :---: | :---: |
-| 查看谱、路线、矩阵、评估 | ✓ | ✓ | ✓ |
+| 查看谱、路线、矩阵、评估、缓解措施 | ✓ | ✓ | ✓ |
 | 新建/更新谱、路线、边 | ✓ |  | ✓ |
 | 提交/运行评估 | ✓ |  | ✓ |
+| 登记/重新提交缓解措施 | ✓ |  | ✓ |
 | 接受/拒绝评估 |  | ✓ | ✓ |
+| 通过/拒绝缓解措施 |  | ✓ | ✓ |
 | 审计检索 |  | ✓ | ✓ |
 
 后端 JWT/RBAC 是权限边界；前端守卫和按钮显隐仅改善交互，不替代后端校验。服务不信任客户端角色头。
@@ -193,11 +224,14 @@ pending_review | accepted | rejected --输入变化--> stale
 | `GET/PUT` | `/routes/:id` | 详情 / 新版本 |
 | `GET/POST` | `/contact-edges` | 查询 / 创建接触边 |
 | `GET/PUT` | `/contact-edges/:id` | 详情 / 新版本 |
-| `POST` | `/matrix/compute` | 计算但不持久化矩阵 |
+| `POST` | `/matrix/compute` | 计算但不持久化矩阵（含路径缓解状态） |
 | `GET/POST` | `/assessments` | 查询 / 入队 |
 | `GET` | `/assessments/:id` | 不可变结果详情 |
 | `POST` | `/assessments/:id/run` | 条件运行 |
 | `POST` | `/assessments/:id/review` | reviewer 接受或拒绝 |
+| `GET/POST` | `/mitigations` | 查询 / 登记高风险路径缓解措施 |
+| `PUT` | `/mitigations/:id` | 待处理措施重新提交复核 |
+| `POST` | `/mitigations/:id/review` | reviewer 通过或拒绝 |
 | `GET` | `/audit` | 审计检索 |
 | `GET` | `/versions/:entityType/:id?version=n` | 最近版本变更摘要 |
 

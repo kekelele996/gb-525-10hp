@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { AlertTriangle, Calculator, RefreshCw } from 'lucide-vue-next'
-import { assessmentApi, routeApi } from '@/api/domain'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { AlertTriangle, Calculator, RefreshCw, SprayCan } from 'lucide-vue-next'
+import { ElMessage } from 'element-plus'
+import { assessmentApi, mitigationApi, routeApi } from '@/api/domain'
 import EvidencePathPanel from '@/components/common/EvidencePathPanel.vue'
 import RiskBadge from '@/components/common/RiskBadge.vue'
+import { useAuth } from '@/hooks/useAuth'
 import type { MatrixResult, ProcessRoute } from '@/types/domain'
 import type { MatrixCell, RiskItem } from '@/types/assessment'
+import { measureTypeLabels, mitigationLabels, type MeasureType, type MitigationStatus } from '@/types/mitigation'
 import { percent } from '@/utils/format'
 
+const auth = useAuth()
 const routes = ref<ProcessRoute[]>([])
 const routeId = ref<number>()
 const result = ref<MatrixResult>()
@@ -15,6 +19,10 @@ const loading = ref(false)
 const error = ref('')
 const allergen = ref('')
 const selectedRisk = ref<RiskItem>()
+const mitigating = ref<RiskItem>()
+const mitigationOpen = ref(false)
+const saving = ref(false)
+const measureForm = reactive({ measure_type: 'cleaning' as MeasureType, completed_on: '', evidence_note: '' })
 const filteredCells = computed(() => result.value?.matrix.filter((item) => !allergen.value || item.allergen === allergen.value) || [])
 const filteredRisks = computed(() => result.value?.risk_items.filter((item) => !allergen.value || item.allergen === allergen.value) || [])
 
@@ -29,6 +37,26 @@ async function compute() {
 function selectCell(cell: MatrixCell) { selectedRisk.value = filteredRisks.value.find((item) => item.target_step_code === cell.target_step_code && item.allergen === cell.allergen) }
 const cellKey = (cell: MatrixCell) => `${cell.target_step_code}:${cell.allergen}`
 const riskKey = (item: RiskItem) => `${item.source_profile_id}:${item.allergen}:${item.path.join('>')}`
+const registrable = (item: RiskItem) => !item.mitigation && (item.risk_level === 'high' || item.risk_level === 'critical')
+const mitigationOf = (cell: MatrixCell): MitigationStatus | '' => {
+  const items = result.value?.risk_items.filter((item) => item.target_step_code === cell.target_step_code && item.allergen === cell.allergen) || []
+  if (items.some((item) => item.mitigation?.status === 'approved')) return 'approved'
+  if (items.some((item) => item.mitigation?.status === 'pending_review')) return 'pending_review'
+  if (items.some((item) => item.mitigation?.status === 'pending')) return 'pending'
+  return ''
+}
+const cellMitigationLabel = (cell: MatrixCell) => { const status = mitigationOf(cell); return status ? mitigationLabels[status] : '' }
+const pathMitigationLabel = (item: RiskItem) => item.mitigation ? mitigationLabels[item.mitigation.status] : ''
+function openMitigation(item: RiskItem) { mitigating.value = item; Object.assign(measureForm, { measure_type: 'cleaning', completed_on: '', evidence_note: '' }); mitigationOpen.value = true }
+async function submitMitigation() {
+  if (!routeId.value || !mitigating.value || !measureForm.completed_on || measureForm.evidence_note.trim().length < 4) return
+  saving.value = true
+  try {
+    await mitigationApi.create({ route_id: routeId.value, allergen: mitigating.value.allergen, source_step_code: mitigating.value.source_step_code, target_step_code: mitigating.value.target_step_code, measure_type: measureForm.measure_type, completed_on: measureForm.completed_on, evidence_note: measureForm.evidence_note })
+    ElMessage.success('缓解措施已提交复核'); mitigationOpen.value = false; await compute()
+  }
+  finally { saving.value = false }
+}
 onMounted(async () => { await loadRoutes(); await compute() })
 </script>
 
@@ -52,6 +80,7 @@ onMounted(async () => { await loadRoutes(); await compute() })
             <el-table-column label="风险" width="125"><template #default="{ row }"><RiskBadge :level="row.risk_level" /></template></el-table-column>
             <el-table-column prop="path_count" label="路径数" width="78" />
             <el-table-column label="分类" width="90"><template #default="{ row }"><span class="status-pill" :class="row.declared ? 'accepted' : 'pending_review'">{{ row.declared ? '已声明' : '传播' }}</span></template></el-table-column>
+            <el-table-column label="缓解" width="96"><template #default="{ row }"><span v-if="mitigationOf(row)" class="status-pill" :class="`mitigation-${mitigationOf(row)}`">{{ cellMitigationLabel(row) }}</span><span v-else class="muted">—</span></template></el-table-column>
             <template #empty><div class="empty-state"><div><strong>没有可传播路径</strong><span>检查已启用接触边及其衰减参数</span></div></div></template>
           </el-table>
           <div v-else-if="!loading && !error" class="empty-state"><div><strong>请选择路线</strong><span>计算后显示真实矩阵单元</span></div></div>
@@ -64,6 +93,7 @@ onMounted(async () => { await loadRoutes(); await compute() })
             <el-table-column label="路径" min-width="220"><template #default="{ row }"><span class="mono">{{ row.path.join(' → ') }}</span></template></el-table-column>
             <el-table-column prop="allergen" label="过敏原" width="105" />
             <el-table-column label="累计风险" width="145"><template #default="{ row }"><RiskBadge :level="row.risk_level" :score="row.raw_score" /></template></el-table-column>
+            <el-table-column label="缓解" width="118"><template #default="{ row }"><span v-if="row.mitigation" class="status-pill" :class="`mitigation-${row.mitigation.status}`">{{ pathMitigationLabel(row) }}</span><el-button v-else-if="auth.canEdit.value && registrable(row)" text type="primary" :icon="SprayCan" @click.stop="openMitigation(row)">登记</el-button><span v-else class="muted">—</span></template></el-table-column>
           </el-table>
         </div>
       </div>
@@ -72,8 +102,21 @@ onMounted(async () => { await loadRoutes(); await compute() })
 
     <div v-if="result?.cycles.length" class="cycle-band"><AlertTriangle :size="17" /><div><strong>检测到 {{ result.cycles.length }} 个环路，已跳过 {{ result.cycle_edges_skipped }} 条回访边</strong><span v-for="cycle in result.cycles" :key="cycle.join('-')" class="mono">{{ cycle.join(' → ') }}</span></div></div>
   </section>
+
+  <el-dialog v-model="mitigationOpen" width="560px">
+    <template #header><div class="dialog-title"><SprayCan :size="18" /><span>登记缓解措施</span></div></template>
+    <template v-if="mitigating">
+      <div class="mitigation-target"><div><span>路径</span><strong class="mono">{{ mitigating.allergen }} · {{ mitigating.source_step_code }} → {{ mitigating.target_step_code }}</strong></div><RiskBadge :level="mitigating.risk_level" :score="mitigating.raw_score" /></div>
+      <el-form label-position="top">
+        <el-form-item label="措施类型" required><el-radio-group v-model="measureForm.measure_type"><el-radio-button value="cleaning">清洗</el-radio-button><el-radio-button value="line_change">换线</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item label="完成日期（不晚于复核提交日）" required><el-date-picker v-model="measureForm.completed_on" type="date" value-format="YYYY-MM-DD" placeholder="选择完成日期" :disabled-date="(day: Date) => day.getTime() > Date.now()" style="width: 100%" /></el-form-item>
+        <el-form-item label="完成证据" required><el-input v-model="measureForm.evidence_note" type="textarea" :rows="4" maxlength="1000" show-word-limit placeholder="清洗或换线记录、检查单与附件位置" /></el-form-item>
+      </el-form>
+    </template>
+    <template #footer><el-button @click="mitigationOpen = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="!measureForm.completed_on || measureForm.evidence_note.trim().length < 4" @click="submitMitigation">提交复核</el-button></template>
+  </el-dialog>
 </template>
 
 <style scoped>
-.metric :deep(.risk-badge) { margin-top: 8px; }.matrix-error { min-height: 46px; display: flex; align-items: center; gap: 9px; padding: 10px 13px; color: #873a34; background: #faecea; border: 1px solid #dfb4b0; }.cell-sub { margin-top: 3px; font-size: 11px; }.cycle-band { display: flex; gap: 10px; padding: 12px 14px; color: #705212; background: #fff7e2; border: 1px solid #dfc986; }.cycle-band strong, .cycle-band span { display: block; }.cycle-band strong { font-size: 12px; }.cycle-band span { margin-top: 6px; color: #7c673a; }
+.metric :deep(.risk-badge) { margin-top: 8px; }.matrix-error { min-height: 46px; display: flex; align-items: center; gap: 9px; padding: 10px 13px; color: #873a34; background: #faecea; border: 1px solid #dfb4b0; }.cell-sub { margin-top: 3px; font-size: 11px; }.cycle-band { display: flex; gap: 10px; padding: 12px 14px; color: #705212; background: #fff7e2; border: 1px solid #dfc986; }.cycle-band strong, .cycle-band span { display: block; }.cycle-band strong { font-size: 12px; }.cycle-band span { margin-top: 6px; color: #7c673a; }.dialog-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 800; }.mitigation-target { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; padding: 10px 12px; background: var(--surface-muted); border: 1px solid var(--line); }.mitigation-target span, .mitigation-target strong { display: block; }.mitigation-target span { color: var(--muted); font-size: 10px; }.mitigation-target strong { margin-top: 3px; }
 </style>

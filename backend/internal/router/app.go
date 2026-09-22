@@ -21,6 +21,7 @@ type Handlers struct {
 	Routes      *handler.RouteHandler
 	Edges       *handler.ContactEdgeHandler
 	Assessments *handler.AssessmentHandler
+	Mitigations *handler.MitigationHandler
 }
 
 func New(cfg config.Config, logger *slog.Logger, database *repository.Database, support *service.SupportService, handlers Handlers) *gin.Engine {
@@ -47,6 +48,7 @@ func New(cfg config.Config, logger *slog.Logger, database *repository.Database, 
 	registerRouteRoutes(protected, handlers.Routes)
 	registerContactEdgeRoutes(protected, handlers.Edges)
 	registerAssessmentRoutes(protected, handlers.Assessments)
+	registerMitigationRoutes(protected, handlers.Mitigations)
 	protected.GET("/audit", middleware.RBAC(constants.RoleReviewer, constants.RoleAdmin), handlers.Support.Audit)
 	protected.GET("/versions/:entityType/:id", handlers.Support.VersionDiff)
 	engine.NoRoute(func(c *gin.Context) {

@@ -1,3 +1,4 @@
+import type { MitigationInfo } from './mitigation'
 import type { RiskLevel } from './risk'
 
 export type AssessmentStatus = 'queued' | 'calculating' | 'pending_review' | 'accepted' | 'rejected' | 'stale'
@@ -56,6 +57,7 @@ export interface RiskItem {
   critical_edge?: EdgeEvidence
   cleaning_evidence: EdgeEvidence[]
   threshold_version: string
+  mitigation?: MitigationInfo
 }
 
 export interface MatrixCell {

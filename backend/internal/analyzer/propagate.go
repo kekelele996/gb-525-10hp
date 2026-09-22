@@ -29,6 +29,17 @@ type EdgeEvidence struct {
 	EdgeVersion          uint    `json:"edge_version"`
 }
 
+// MitigationInfo annotates a live matrix path with the latest registered
+// mitigation measure. The raw score and cleaning evidence of the path stay
+// untouched so approved paths keep their original figures.
+type MitigationInfo struct {
+	MeasureID    uint                       `json:"measure_id"`
+	MeasureType  string                     `json:"measure_type"`
+	Status       constants.MitigationStatus `json:"status"`
+	CompletedOn  string                     `json:"completed_on"`
+	EvidenceNote string                     `json:"evidence_note"`
+}
+
 type RiskItem struct {
 	Allergen          string              `json:"allergen"`
 	SourceProfileID   uint                `json:"source_profile_id"`
@@ -44,6 +55,7 @@ type RiskItem struct {
 	CriticalEdge      *EdgeEvidence       `json:"critical_edge"`
 	CleaningEvidence  []EdgeEvidence      `json:"cleaning_evidence"`
 	ThresholdVersion  string              `json:"threshold_version"`
+	Mitigation        *MitigationInfo     `json:"mitigation,omitempty"`
 }
 
 type MatrixCell struct {

@@ -158,7 +158,7 @@ func (s *SupportService) ListAudit(ctx context.Context, query dto.AuditQuery) ([
 }
 
 func (s *SupportService) VersionDiff(ctx context.Context, entityType string, id, version uint) (dto.VersionDiff, error) {
-	allowed := map[string]bool{"process_route": true, "allergen_profile": true, "contact_edge": true, "assessment_run": true}
+	allowed := map[string]bool{"process_route": true, "allergen_profile": true, "contact_edge": true, "assessment_run": true, "mitigation_measure": true}
 	if !allowed[entityType] {
 		return dto.VersionDiff{}, NewError(http.StatusBadRequest, "invalid_entity_type", "不支持的实体类型", nil)
 	}

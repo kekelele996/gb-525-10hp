@@ -32,7 +32,11 @@ func (r *contactEdgeRepository) Create(ctx context.Context, edge *model.ContactE
 		if err := markRouteRunsStale(tx, edge.RouteID); err != nil {
 			return err
 		}
-		audit, err := makeAudit(scope, "contact_edge.created", "contact_edge", edge.ID, "", edgeSummary(*edge), map[string]any{"route_id": edge.RouteID, "version": edge.Version, "assessments_staled": true})
+		invalidated, err := invalidateRouteMeasures(tx, edge.RouteID)
+		if err != nil {
+			return err
+		}
+		audit, err := makeAudit(scope, "contact_edge.created", "contact_edge", edge.ID, "", edgeSummary(*edge), map[string]any{"route_id": edge.RouteID, "version": edge.Version, "assessments_staled": true, "measures_invalidated": invalidated})
 		if err != nil {
 			return err
 		}
@@ -97,10 +101,14 @@ func (r *contactEdgeRepository) Update(ctx context.Context, edge *model.ContactE
 		if err := markRouteRunsStale(tx, before.RouteID); err != nil {
 			return err
 		}
+		invalidated, err := invalidateRouteMeasures(tx, before.RouteID)
+		if err != nil {
+			return err
+		}
 		if err := tx.First(edge, edge.ID).Error; err != nil {
 			return fmt.Errorf("reload contact edge: %w", err)
 		}
-		audit, err := makeAudit(scope, "contact_edge.versioned", "contact_edge", edge.ID, edgeSummary(before), edgeSummary(*edge), map[string]any{"route_id": edge.RouteID, "from_version": expected, "to_version": edge.Version, "assessments_staled": true})
+		audit, err := makeAudit(scope, "contact_edge.versioned", "contact_edge", edge.ID, edgeSummary(before), edgeSummary(*edge), map[string]any{"route_id": edge.RouteID, "from_version": expected, "to_version": edge.Version, "assessments_staled": true, "measures_invalidated": invalidated})
 		if err != nil {
 			return err
 		}

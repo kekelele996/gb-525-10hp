@@ -59,9 +59,14 @@ func Open(cfg config.Config) (*Database, error) {
 }
 
 func (d *Database) Migrate(ctx context.Context) error {
-	models := []any{&model.User{}, &model.AllergenProfile{}, &model.ProcessRoute{}, &model.ContactEdge{}, &model.AssessmentRun{}, &model.AuditEvent{}}
+	models := []any{&model.User{}, &model.AllergenProfile{}, &model.ProcessRoute{}, &model.ContactEdge{}, &model.AssessmentRun{}, &model.MitigationMeasure{}, &model.AuditEvent{}}
 	if err := d.DB.WithContext(ctx).AutoMigrate(models...); err != nil {
 		return fmt.Errorf("auto migrate schema: %w", err)
+	}
+	// One open (pending or pending review) measure per matrix path, enforced
+	// for both SQLite smoke runs and PostgreSQL deployments.
+	if err := d.DB.WithContext(ctx).Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_mitigation_open_path ON mitigation_measures (route_id, allergen, source_step_code, target_step_code) WHERE mitigation_status IN ('pending','pending_review')").Error; err != nil {
+		return fmt.Errorf("create mitigation open-path index: %w", err)
 	}
 	return nil
 }
@@ -229,6 +234,27 @@ func markAllRunsStale(tx *gorm.DB) error {
 		return fmt.Errorf("mark assessments stale: %w", err)
 	}
 	return nil
+}
+
+// invalidateRouteMeasures returns measures awaiting review for one route to
+// pending after route step or contact edge version changes. Approved and
+// rejected measures are historical records and stay untouched.
+func invalidateRouteMeasures(tx *gorm.DB, routeID uint) (int64, error) {
+	result := tx.Model(&model.MitigationMeasure{}).Where("route_id = ? AND mitigation_status = ?", routeID, constants.MitigationPendingReview).Update("mitigation_status", constants.MitigationPending)
+	if result.Error != nil {
+		return 0, fmt.Errorf("invalidate route mitigations: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// invalidateAllMeasures mirrors markAllRunsStale for allergen profile version
+// changes, which affect every route that propagates the profile allergens.
+func invalidateAllMeasures(tx *gorm.DB) (int64, error) {
+	result := tx.Model(&model.MitigationMeasure{}).Where("mitigation_status = ?", constants.MitigationPendingReview).Update("mitigation_status", constants.MitigationPending)
+	if result.Error != nil {
+		return 0, fmt.Errorf("invalidate mitigations: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 func pageValues(page, size int) (int, int) {

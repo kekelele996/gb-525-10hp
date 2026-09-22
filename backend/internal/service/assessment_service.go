@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"food-allergen-crosscontact-analyzer/backend/internal/analyzer"
@@ -18,13 +19,14 @@ import (
 )
 
 type AssessmentService struct {
-	runs       repository.AssessmentRepository
-	routes     repository.RouteRepository
-	profiles   repository.ProfileRepository
-	edges      repository.ContactEdgeRepository
-	maxDepth   int
-	thresholds analyzer.ThresholdSnapshot
-	algorithm  string
+	runs        repository.AssessmentRepository
+	routes      repository.RouteRepository
+	profiles    repository.ProfileRepository
+	edges       repository.ContactEdgeRepository
+	mitigations repository.MitigationRepository
+	maxDepth    int
+	thresholds  analyzer.ThresholdSnapshot
+	algorithm   string
 }
 
 type queuedAssessmentSnapshot struct {
@@ -32,17 +34,58 @@ type queuedAssessmentSnapshot struct {
 	RouteVersionAtQueue uint `json:"route_version_at_queue"`
 }
 
-func NewAssessmentService(runs repository.AssessmentRepository, routes repository.RouteRepository, profiles repository.ProfileRepository, edges repository.ContactEdgeRepository, cfg config.Config) (*AssessmentService, error) {
+func NewAssessmentService(runs repository.AssessmentRepository, routes repository.RouteRepository, profiles repository.ProfileRepository, edges repository.ContactEdgeRepository, mitigations repository.MitigationRepository, cfg config.Config) (*AssessmentService, error) {
 	thresholds, err := analyzer.NewThresholdSnapshot(cfg.Thresholds)
 	if err != nil {
 		return nil, fmt.Errorf("initialize thresholds: %w", err)
 	}
-	return &AssessmentService{runs: runs, routes: routes, profiles: profiles, edges: edges, maxDepth: cfg.MaxPropagationDepth, thresholds: thresholds, algorithm: "weighted-path-v1/" + thresholds.Version}, nil
+	return &AssessmentService{runs: runs, routes: routes, profiles: profiles, edges: edges, mitigations: mitigations, maxDepth: cfg.MaxPropagationDepth, thresholds: thresholds, algorithm: "weighted-path-v1/" + thresholds.Version}, nil
 }
 
 func (s *AssessmentService) Preview(ctx context.Context, routeID uint) (analyzer.Result, error) {
 	result, _, err := s.compute(ctx, routeID)
-	return result, err
+	if err != nil {
+		return analyzer.Result{}, err
+	}
+	measures, err := s.mitigations.ActiveForRoute(ctx, routeID)
+	if err != nil {
+		return analyzer.Result{}, err
+	}
+	attachMitigations(&result, measures)
+	return result, nil
+}
+
+// attachMitigations annotates live matrix paths with their latest registered
+// measure. Approved measures outrank open ones so an approved path keeps
+// showing as mitigated even when a follow-up measure is under review.
+func attachMitigations(result *analyzer.Result, measures []model.MitigationMeasure) {
+	latest := make(map[string]model.MitigationMeasure, len(measures))
+	for _, measure := range measures {
+		key := mitigationPathKey(measure.Allergen, measure.SourceStepCode, measure.TargetStepCode)
+		current, exists := latest[key]
+		if !exists || mitigationPrecedence(measure) > mitigationPrecedence(current) || (mitigationPrecedence(measure) == mitigationPrecedence(current) && measure.ID > current.ID) {
+			latest[key] = measure
+		}
+	}
+	for index := range result.RiskItems {
+		item := &result.RiskItems[index]
+		measure, ok := latest[mitigationPathKey(item.Allergen, item.SourceStepCode, item.TargetStepCode)]
+		if !ok {
+			continue
+		}
+		item.Mitigation = &analyzer.MitigationInfo{MeasureID: measure.ID, MeasureType: measure.MeasureType, Status: measure.MitigationStatus, CompletedOn: measure.CompletedOn.Format("2006-01-02"), EvidenceNote: measure.EvidenceNote}
+	}
+}
+
+func mitigationPathKey(allergen, source, target string) string {
+	return strings.ToLower(strings.TrimSpace(allergen)) + "\x00" + source + "\x00" + target
+}
+
+func mitigationPrecedence(measure model.MitigationMeasure) int {
+	if measure.MitigationStatus == constants.MitigationApproved {
+		return 1
+	}
+	return 0
 }
 
 func (s *AssessmentService) Create(ctx context.Context, request dto.CreateAssessmentRequest, actor Principal, requestID string) (model.AssessmentRun, error) {
