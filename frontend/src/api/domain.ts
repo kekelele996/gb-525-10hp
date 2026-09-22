@@ -1,6 +1,7 @@
 import { api, page, unwrap } from './client'
 import type { AllergenProfile, AuditEvent, ContactEdge, MatrixResult, ProcessRoute, User, VersionDiff } from '@/types/domain'
 import type { AssessmentRun, AssessmentStatus } from '@/types/assessment'
+import type { MitigationMeasure, MitigationStatus } from '@/types/mitigation'
 
 export const authApi = {
   login: (username: string, password: string) => unwrap<{ token: string; expires_at: string; user: User }>(api.post('/auth/login', { username, password })),
@@ -39,4 +40,10 @@ export const assessmentApi = {
 export const auditApi = {
   list: (params: Record<string, unknown> = {}) => page<AuditEvent>(api.get('/audit', { params })),
   version: (entityType: string, id: number, version: number) => unwrap<VersionDiff>(api.get(`/versions/${entityType}/${id}`, { params: { version } })),
+}
+
+export const mitigationApi = {
+  list: (params: { route_id?: number; status?: MitigationStatus; page?: number; page_size?: number } = {}) => page<MitigationMeasure>(api.get('/mitigations', { params })),
+  create: (payload: Record<string, unknown>) => unwrap<MitigationMeasure>(api.post('/mitigations', payload)),
+  review: (id: number, decision: 'approved' | 'rejected', reason: string) => unwrap<MitigationMeasure>(api.post(`/mitigations/${id}/review`, { decision, reason })),
 }

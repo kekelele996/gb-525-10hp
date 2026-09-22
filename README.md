@@ -39,6 +39,7 @@ docker compose down -v --remove-orphans
 - 工艺路线：维护有序步骤、每步引用的过敏原谱、声明过敏原、路线状态和乐观锁版本。
 - 接触关系：在路线内维护来源/目标步骤、接触类型、共享设备、清洗衰减、带入概率和证据记录。
 - 交叉接触矩阵：从真实路线、谱和已启用接触边计算目标步骤 × 过敏原矩阵，可按过敏原筛选并检查完整证据路径。
+- 缓解复核：针对高风险路径登记清洗或换线措施，记录完成日期与证据；复核通过后矩阵标记该路径已缓解，同时保留原始分数与证据。
 - 评估工作台：执行 `queued -> calculating -> pending_review -> accepted | rejected` 状态流；输入变化使旧结果变为 `stale`。
 - 审计检索：记录 request ID、操作者、实体、动作、前后摘要和版本元数据，并提供版本摘要对比。
 
@@ -74,7 +75,7 @@ docker compose down -v --remove-orphans
 │   ├── api/                        # Axios 客户端和领域 API
 │   ├── components/common/          # 风险、证据、版本共享组件
 │   ├── hooks/                      # 认证与评估轮询
-│   ├── pages/                      # 五个业务页面及登录页
+│   ├── pages/                      # 六个业务页面及登录页
 │   ├── router/                     # 路由和认证守卫
 │   ├── stores/                     # 认证与评估 Pinia 状态
 │   ├── types/                      # 共享枚举和领域类型
@@ -101,6 +102,10 @@ docker compose down -v --remove-orphans
 ### `AssessmentRun`
 
 每次运行保存完整输入快照、矩阵、风险项、算法/阈值版本和完成时间。没有结果更新接口；复核仅条件更新状态与复核字段。新输入版本不会覆盖旧 JSON，而是把旧结果标记为 `stale`。
+
+### `MitigationMeasure`
+
+针对单条高风险路径（路线版本 + 过敏原 + 来源到目标步骤）登记的清洗或换线措施，保存完成日期、证据与复核结论。同一路径仅允许一条 `pending_review` 措施（数据库部分唯一索引约束）；完成日期不能晚于复核提交日。复核通过前，路线步骤、过敏原谱或接触边的版本变化会在同一事务内将待复核措施置为 `invalidated`（待处理）；通过后矩阵在对应路径上显示已缓解，原始分数、风险等级和清洗证据保持不变。
 
 ## 传播算法
 
@@ -129,11 +134,15 @@ docker compose down -v --remove-orphans
 queued -> calculating -> pending_review -> accepted
                               \-------> rejected
 pending_review | accepted | rejected --输入变化--> stale
+
+mitigation: pending_review -> approved | rejected
+            pending_review --输入版本变化--> invalidated
 ```
 
 - 运行使用 `WHERE id = ? AND assessment_status = 'queued'` 条件更新。
 - 完成使用 `calculating` 条件更新并在同一事务内写审计。
 - 接受/拒绝使用 `pending_review` 条件更新，拒绝和接受均要求复核理由。
+- 缓解措施复核同样使用 `pending_review` 条件更新；谱、路线和边版本变化在事务内将待复核措施置为 `invalidated` 并写审计元数据。
 - 谱、路线和边使用 `expected_version` 乐观锁；版本不一致返回 HTTP `409 version_conflict`。
 - 输入版本更新、边新增或更新在事务内将关联旧结果改为 `stale` 并写审计。
 
@@ -167,14 +176,29 @@ pending_review | accepted | rejected --输入变化--> stale
 | 前端 store | `frontend/src/stores/assessments.ts` |
 | 页面 | `frontend/src/pages/AssessmentsPage.vue` |
 
+### `MitigationStatus = pending_review | approved | rejected | invalidated` 与 `MeasureType = cleaning | line_change`
+
+| 层 | 位置 |
+| --- | --- |
+| 后端常量 / 状态转换 | `backend/internal/constants/mitigation.go` |
+| 数据库约束 / 模型 | `backend/internal/model/mitigation_measure.go` 的 CHECK 与部分唯一索引 |
+| DTO 请求 / 查询 | `backend/internal/dto/mitigation.go` |
+| 仓储条件更新 / 失效 | `backend/internal/repository/mitigation_repository.go`、`support_repository.go` |
+| 矩阵标注 | `backend/internal/analyzer/mitigation.go`、`service/assessment_service.go` |
+| 路由权限 | `backend/internal/router/mitigation_router.go` |
+| 前端类型 | `frontend/src/types/mitigation.ts`、`types/assessment.ts` |
+| 页面 / 组件 | `frontend/src/pages/MitigationsPage.vue`、`MatrixPage.vue`、`components/common/EvidencePathPanel.vue` |
+
 ## 权限
 
 | 操作 | quality_analyst | reviewer | admin |
 | --- | :---: | :---: | :---: |
-| 查看谱、路线、矩阵、评估 | ✓ | ✓ | ✓ |
+| 查看谱、路线、矩阵、评估、缓解措施 | ✓ | ✓ | ✓ |
 | 新建/更新谱、路线、边 | ✓ |  | ✓ |
 | 提交/运行评估 | ✓ |  | ✓ |
+| 登记缓解措施 | ✓ |  | ✓ |
 | 接受/拒绝评估 |  | ✓ | ✓ |
+| 通过/拒绝缓解措施 |  | ✓ | ✓ |
 | 审计检索 |  | ✓ | ✓ |
 
 后端 JWT/RBAC 是权限边界；前端守卫和按钮显隐仅改善交互，不替代后端校验。服务不信任客户端角色头。
@@ -198,6 +222,9 @@ pending_review | accepted | rejected --输入变化--> stale
 | `GET` | `/assessments/:id` | 不可变结果详情 |
 | `POST` | `/assessments/:id/run` | 条件运行 |
 | `POST` | `/assessments/:id/review` | reviewer 接受或拒绝 |
+| `GET/POST` | `/mitigations` | 查询 / 登记缓解措施 |
+| `GET` | `/mitigations/:id` | 措施详情 |
+| `POST` | `/mitigations/:id/review` | reviewer 通过或拒绝 |
 | `GET` | `/audit` | 审计检索 |
 | `GET` | `/versions/:entityType/:id?version=n` | 最近版本变更摘要 |
 

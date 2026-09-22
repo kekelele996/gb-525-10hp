@@ -44,6 +44,7 @@ type RiskItem struct {
 	CriticalEdge      *EdgeEvidence       `json:"critical_edge"`
 	CleaningEvidence  []EdgeEvidence      `json:"cleaning_evidence"`
 	ThresholdVersion  string              `json:"threshold_version"`
+	Mitigation        *MitigationInfo     `json:"mitigation,omitempty"`
 }
 
 type MatrixCell struct {
@@ -54,6 +55,7 @@ type MatrixCell struct {
 	RiskLevel      constants.RiskLevel `json:"risk_level"`
 	PathCount      int                 `json:"path_count"`
 	Declared       bool                `json:"declared"`
+	MitigatedPaths int                 `json:"mitigated_paths"`
 }
 
 type Result struct {

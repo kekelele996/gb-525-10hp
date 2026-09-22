@@ -86,10 +86,14 @@ func (r *routeRepository) Update(ctx context.Context, route *model.ProcessRoute,
 		if err := markRouteRunsStale(tx, route.ID); err != nil {
 			return err
 		}
+		invalidated, err := markRouteMitigationsInvalidated(tx, route.ID)
+		if err != nil {
+			return err
+		}
 		if err := tx.First(route, route.ID).Error; err != nil {
 			return fmt.Errorf("reload process route: %w", err)
 		}
-		audit, err := makeAudit(scope, "route.versioned", "process_route", route.ID, routeSummary(before), routeSummary(*route), map[string]any{"from_version": expected, "to_version": route.Version, "assessments_staled": true})
+		audit, err := makeAudit(scope, "route.versioned", "process_route", route.ID, routeSummary(before), routeSummary(*route), map[string]any{"from_version": expected, "to_version": route.Version, "assessments_staled": true, "mitigations_invalidated": invalidated})
 		if err != nil {
 			return err
 		}

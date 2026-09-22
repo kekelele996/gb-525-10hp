@@ -9,6 +9,7 @@ const router = createRouter({
     { path: '/profiles', name: 'profiles', component: () => import('@/pages/ProfilesPage.vue') },
     { path: '/routes', name: 'routes', component: () => import('@/pages/RoutesPage.vue') },
     { path: '/matrix', name: 'matrix', component: () => import('@/pages/MatrixPage.vue') },
+    { path: '/mitigations', name: 'mitigations', component: () => import('@/pages/MitigationsPage.vue') },
     { path: '/assessments', name: 'assessments', component: () => import('@/pages/AssessmentsPage.vue') },
     { path: '/audit', name: 'audit', component: () => import('@/pages/AuditPage.vue'), meta: { reviewOnly: true } },
     { path: '/:pathMatch(.*)*', redirect: '/profiles' },

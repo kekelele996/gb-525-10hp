@@ -59,9 +59,14 @@ func Open(cfg config.Config) (*Database, error) {
 }
 
 func (d *Database) Migrate(ctx context.Context) error {
-	models := []any{&model.User{}, &model.AllergenProfile{}, &model.ProcessRoute{}, &model.ContactEdge{}, &model.AssessmentRun{}, &model.AuditEvent{}}
+	models := []any{&model.User{}, &model.AllergenProfile{}, &model.ProcessRoute{}, &model.ContactEdge{}, &model.AssessmentRun{}, &model.MitigationMeasure{}, &model.AuditEvent{}}
 	if err := d.DB.WithContext(ctx).AutoMigrate(models...); err != nil {
 		return fmt.Errorf("auto migrate schema: %w", err)
+	}
+	// One pending measure per path, enforced on both PostgreSQL and SQLite.
+	pendingIndex := "CREATE UNIQUE INDEX IF NOT EXISTS idx_mitigation_one_pending ON mitigation_measures (route_id, allergen, source_step_code, target_step_code) WHERE mitigation_status = 'pending_review'"
+	if err := d.DB.WithContext(ctx).Exec(pendingIndex).Error; err != nil {
+		return fmt.Errorf("create pending mitigation index: %w", err)
 	}
 	return nil
 }
@@ -229,6 +234,30 @@ func markAllRunsStale(tx *gorm.DB) error {
 		return fmt.Errorf("mark assessments stale: %w", err)
 	}
 	return nil
+}
+
+// markRouteMitigationsInvalidated returns pending measures of one route to the
+// invalidated (待处理) state when route steps or contact edges change version.
+func markRouteMitigationsInvalidated(tx *gorm.DB, routeID uint) (int64, error) {
+	now := time.Now().UTC()
+	updates := map[string]any{"mitigation_status": constants.MitigationInvalidated, "invalidated_at": &now}
+	result := tx.Model(&model.MitigationMeasure{}).Where("route_id = ? AND mitigation_status = ?", routeID, constants.MitigationPendingReview).Updates(updates)
+	if result.Error != nil {
+		return 0, fmt.Errorf("invalidate route mitigations: %w", result.Error)
+	}
+	return result.RowsAffected, nil
+}
+
+// markAllMitigationsInvalidated covers allergen profile version changes, which
+// can alter the allergen spectrum of every registered path.
+func markAllMitigationsInvalidated(tx *gorm.DB) (int64, error) {
+	now := time.Now().UTC()
+	updates := map[string]any{"mitigation_status": constants.MitigationInvalidated, "invalidated_at": &now}
+	result := tx.Model(&model.MitigationMeasure{}).Where("mitigation_status = ?", constants.MitigationPendingReview).Updates(updates)
+	if result.Error != nil {
+		return 0, fmt.Errorf("invalidate mitigations: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 func pageValues(page, size int) (int, int) {

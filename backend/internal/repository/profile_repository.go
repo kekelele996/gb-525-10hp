@@ -89,10 +89,14 @@ func (r *profileRepository) Update(ctx context.Context, profile *model.AllergenP
 		if err := markAllRunsStale(tx); err != nil {
 			return err
 		}
+		invalidated, err := markAllMitigationsInvalidated(tx)
+		if err != nil {
+			return err
+		}
 		if err := tx.First(profile, profile.ID).Error; err != nil {
 			return fmt.Errorf("reload allergen profile: %w", err)
 		}
-		audit, err := makeAudit(scope, "profile.versioned", "allergen_profile", profile.ID, profileSummary(before), profileSummary(*profile), map[string]any{"from_version": expected, "to_version": profile.Version, "assessments_staled": true})
+		audit, err := makeAudit(scope, "profile.versioned", "allergen_profile", profile.ID, profileSummary(before), profileSummary(*profile), map[string]any{"from_version": expected, "to_version": profile.Version, "assessments_staled": true, "mitigations_invalidated": invalidated})
 		if err != nil {
 			return err
 		}

@@ -22,6 +22,7 @@ type AssessmentService struct {
 	routes     repository.RouteRepository
 	profiles   repository.ProfileRepository
 	edges      repository.ContactEdgeRepository
+	mitigation repository.MitigationRepository
 	maxDepth   int
 	thresholds analyzer.ThresholdSnapshot
 	algorithm  string
@@ -32,12 +33,12 @@ type queuedAssessmentSnapshot struct {
 	RouteVersionAtQueue uint `json:"route_version_at_queue"`
 }
 
-func NewAssessmentService(runs repository.AssessmentRepository, routes repository.RouteRepository, profiles repository.ProfileRepository, edges repository.ContactEdgeRepository, cfg config.Config) (*AssessmentService, error) {
+func NewAssessmentService(runs repository.AssessmentRepository, routes repository.RouteRepository, profiles repository.ProfileRepository, edges repository.ContactEdgeRepository, mitigation repository.MitigationRepository, cfg config.Config) (*AssessmentService, error) {
 	thresholds, err := analyzer.NewThresholdSnapshot(cfg.Thresholds)
 	if err != nil {
 		return nil, fmt.Errorf("initialize thresholds: %w", err)
 	}
-	return &AssessmentService{runs: runs, routes: routes, profiles: profiles, edges: edges, maxDepth: cfg.MaxPropagationDepth, thresholds: thresholds, algorithm: "weighted-path-v1/" + thresholds.Version}, nil
+	return &AssessmentService{runs: runs, routes: routes, profiles: profiles, edges: edges, mitigation: mitigation, maxDepth: cfg.MaxPropagationDepth, thresholds: thresholds, algorithm: "weighted-path-v1/" + thresholds.Version}, nil
 }
 
 func (s *AssessmentService) Preview(ctx context.Context, routeID uint) (analyzer.Result, error) {
@@ -188,6 +189,11 @@ func (s *AssessmentService) computeRoute(ctx context.Context, route model.Proces
 	if err != nil {
 		return analyzer.Result{}, nil, NewError(http.StatusUnprocessableEntity, "propagation_failed", "风险传播计算失败", err)
 	}
+	measures, err := s.mitigation.ApprovedForRoute(ctx, route.ID)
+	if err != nil {
+		return analyzer.Result{}, nil, err
+	}
+	analyzer.ApplyMitigations(&result, measures)
 	sort.Slice(profileVersions, func(i, j int) bool { return profileVersions[i]["id"].(uint) < profileVersions[j]["id"].(uint) })
 	edgeVersions := make([]map[string]any, 0, len(edges))
 	for _, edge := range edges {

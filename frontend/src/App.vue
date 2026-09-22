@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ClipboardCheck, FlaskConical, LogOut, Menu, Network, ScrollText, ShieldCheck, TableProperties, X } from 'lucide-vue-next'
+import { ClipboardCheck, FlaskConical, LogOut, Menu, Network, ScrollText, ShieldCheck, Sparkles, TableProperties, X } from 'lucide-vue-next'
 import { useAuth } from '@/hooks/useAuth'
 import { roleLabel } from '@/utils/format'
 
@@ -14,6 +14,7 @@ const nav = computed(() => [
   { to: '/profiles', label: '过敏原谱', icon: FlaskConical, show: true },
   { to: '/routes', label: '工艺路线', icon: Network, show: true },
   { to: '/matrix', label: '接触矩阵', icon: TableProperties, show: true },
+  { to: '/mitigations', label: '缓解复核', icon: Sparkles, show: true },
   { to: '/assessments', label: '评估工作台', icon: ClipboardCheck, show: true },
   { to: '/audit', label: '审计检索', icon: ScrollText, show: auth.canReview.value },
 ].filter((item) => item.show))

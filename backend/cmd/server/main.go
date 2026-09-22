@@ -59,17 +59,19 @@ func main() {
 	routeRepo := repository.NewRouteRepository(database.DB)
 	edgeRepo := repository.NewContactEdgeRepository(database.DB)
 	assessmentRepo := repository.NewAssessmentRepository(database.DB)
+	mitigationRepo := repository.NewMitigationRepository(database.DB)
 	supportService := service.NewSupportService(supportRepo, cfg)
 	profileService := service.NewProfileService(profileRepo)
 	routeService := service.NewRouteService(routeRepo, profileRepo)
 	edgeService := service.NewContactEdgeService(edgeRepo, routeRepo)
-	assessmentService, err := service.NewAssessmentService(assessmentRepo, routeRepo, profileRepo, edgeRepo, cfg)
+	mitigationService := service.NewMitigationService(mitigationRepo, routeRepo, profileRepo)
+	assessmentService, err := service.NewAssessmentService(assessmentRepo, routeRepo, profileRepo, edgeRepo, mitigationRepo, cfg)
 	if err != nil {
 		logger.Error("assessment_service_failed", "error", err)
 		os.Exit(1)
 	}
 	validate := validator.New(validator.WithRequiredStructEnabled())
-	handlers := router.Handlers{Support: handler.NewSupportHandler(supportService, validate), Profiles: handler.NewProfileHandler(profileService, validate), Routes: handler.NewRouteHandler(routeService, validate), Edges: handler.NewContactEdgeHandler(edgeService, validate), Assessments: handler.NewAssessmentHandler(assessmentService, validate)}
+	handlers := router.Handlers{Support: handler.NewSupportHandler(supportService, validate), Profiles: handler.NewProfileHandler(profileService, validate), Routes: handler.NewRouteHandler(routeService, validate), Edges: handler.NewContactEdgeHandler(edgeService, validate), Assessments: handler.NewAssessmentHandler(assessmentService, validate), Mitigations: handler.NewMitigationHandler(mitigationService, validate)}
 	engine := router.New(cfg, logger, database, supportService, handlers)
 	server := &http.Server{Addr: ":" + cfg.Port, Handler: engine, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	serverErrors := make(chan error, 1)
